@@ -9,5 +9,6 @@ export const patientData = {
   status: "in-progress" as const,
   timeSinceReferral: "2 days",
   targetCompletion: "10/29/25",
-  phone: "+12402465262",
+  // Use VITE_TEST_PHONE_NUMBER from .env if set, otherwise use demo number
+  phone: import.meta.env.VITE_TEST_PHONE_NUMBER || "+12014231932",
 };

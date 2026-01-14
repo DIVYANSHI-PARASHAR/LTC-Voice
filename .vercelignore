@@ -1,0 +1,50 @@
+# Vercel ignore file
+# Files and directories to exclude from Vercel deployment
+
+# Backend development files (we use api/ for serverless)
+backend/
+
+# Development files
+.env.local
+.env.development.local
+.env.test.local
+
+# Testing
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/test_*.py
+**/*_test.py
+**/tests/
+
+# Documentation (optional - remove if you want docs deployed)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts (Vercel will build these)
+dist/
+build/
+*.tsbuildinfo
+
+# Supabase local files
+.supabase/
+
+# Nginx (not needed for Vercel)
+nginx.conf
+NGINX_SETUP.md

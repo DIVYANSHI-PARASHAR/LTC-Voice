@@ -10,6 +10,8 @@ import { ConsolidatedAssessmentView } from "@/components/workflow-a/Consolidated
 import { useInitiateCall } from "@/hooks/useInitiateCall";
 import { useNotificationContext } from "@/contexts/NotificationContext";
 import { usePatientData } from "@/contexts/PatientDataContext";
+import { useVAPICalls } from "@/integrations/supabase/hooks/use-assessments";
+import { useEffect, useMemo } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -198,6 +200,39 @@ export default function PatientCaseManager() {
   const callResults = persistedData?.callResults || null;
   const currentStatus = persistedData?.status || foundPatient.status;
 
+  // Load stored VAPI calls from database
+  const { data: vapiCalls, isLoading: isLoadingVAPICalls } = useVAPICalls(patientId || '');
+  
+  // Get the latest call with transcript from database
+  const latestStoredCall = useMemo(() => {
+    if (!vapiCalls || vapiCalls.length === 0) return null;
+    // Find the most recent call with transcript
+    return vapiCalls.find(call => call.transcript) || vapiCalls[0];
+  }, [vapiCalls]);
+
+  // Merge database transcript with context data (database takes precedence)
+  const finalCallResults = useMemo(() => {
+    if (latestStoredCall && latestStoredCall.transcript) {
+      // Parse transcript from database
+      let transcript = latestStoredCall.transcript;
+      if (typeof transcript === 'string') {
+        // Convert string transcript to array format expected by UI
+        transcript = [{ role: "conversation", content: transcript }];
+      }
+      
+      // Parse structured_data from metadata if available
+      const structuredData = latestStoredCall.metadata?.structured_data || null;
+      
+      return {
+        structuredData: structuredData || callResults?.structuredData,
+        transcript: transcript || callResults?.transcript,
+        recordingUrl: latestStoredCall.recording_url || callResults?.recordingUrl,
+        cost: latestStoredCall.cost || callResults?.cost,
+      };
+    }
+    return callResults;
+  }, [latestStoredCall, callResults]);
+
   // Map patient status to expected values
   const mapStatus = (
     status: string
@@ -209,6 +244,8 @@ export default function PatientCaseManager() {
   };
 
   // Build patient data with found patient details
+  // Phone number: Use VITE_TEST_PHONE_NUMBER if set, otherwise use demo number
+  // Set VITE_TEST_PHONE_NUMBER in .env file to use your own number for testing
   const patientData = {
     name: foundPatient.name,
     age: foundPatient.age,
@@ -220,7 +257,7 @@ export default function PatientCaseManager() {
     status: mapStatus(foundPatient.status),
     timeSinceReferral: `${foundPatient.daysInWorkflow} days`,
     targetCompletion: "10/29/25",
-    phone: "+12402465262",
+    phone: import.meta.env.VITE_TEST_PHONE_NUMBER || "+12014231932",
   };
 
   const stageProgress = getStageProgress(currentStatus);
@@ -232,6 +269,7 @@ export default function PatientCaseManager() {
     const result = await initiateCall({
       patientPhone: patientData.phone,
       patientName: patientData.name,
+      patientId: patientId || undefined, // Pass patientId for database storage
       waitForCompletion: "ended", // Wait for call to finish
       timeout: 600, // 10 minute timeout
     });
@@ -302,21 +340,31 @@ export default function PatientCaseManager() {
           </TabsList>
 
           <TabsContent value="assessments" className="space-y-4">
-            {callResults?.structuredData ? (
+            {finalCallResults?.structuredData ? (
               <ConsolidatedAssessmentView
                 intakeResults={[
-                  { domain: "Medication Memory", findings: callResults.structuredData.structured_data?.medication_memory || "" },
-                  { domain: "Mobility Equipment", findings: callResults.structuredData.structured_data?.mobility_equipment || "" },
-                  { domain: "Lives With", findings: callResults.structuredData.structured_data?.lives_with || "" },
-                  { domain: "Summary", findings: callResults.structuredData.summary || "" },
+                  { domain: "Medication Memory", findings: finalCallResults.structuredData.structured_data?.medication_memory || "" },
+                  { domain: "Mobility Equipment", findings: finalCallResults.structuredData.structured_data?.mobility_equipment || "" },
+                  { domain: "Lives With", findings: finalCallResults.structuredData.structured_data?.lives_with || "" },
+                  { domain: "Summary", findings: finalCallResults.structuredData.summary || "" },
                 ]}
-                intakeCallDate={new Intl.DateTimeFormat('en-US', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short',
-                  timeZone: 'America/New_York'
-                }).format(new Date())}
-                intakeDuration="12 minutes"
-                transcript={callResults.transcript}
+                intakeCallDate={latestStoredCall?.started_at 
+                  ? new Intl.DateTimeFormat('en-US', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                      timeZone: 'America/New_York'
+                    }).format(new Date(latestStoredCall.started_at))
+                  : new Intl.DateTimeFormat('en-US', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                      timeZone: 'America/New_York'
+                    }).format(new Date())
+                }
+                intakeDuration={latestStoredCall?.duration_seconds 
+                  ? `${Math.floor(latestStoredCall.duration_seconds / 60)} minutes`
+                  : "12 minutes"
+                }
+                transcript={finalCallResults.transcript}
                 patientName={patientData.name}
               />
             ) : (

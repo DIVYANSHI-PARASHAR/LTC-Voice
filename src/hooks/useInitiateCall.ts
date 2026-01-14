@@ -5,15 +5,35 @@ import { supabase } from "@/integrations/supabase/client";
 const BACKEND_API_URL =
   import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
-// 🎭 HACKATHON MODE: Set to true to use mock data instead of real calls
-const USE_MOCK_CALL = true;
+// 🎭 MOCK MODE: Controls whether to use mock data instead of real VAPI calls
+// 
+// Default behavior:
+//   - Development: Mock mode ON (safe default, no real API calls)
+//   - Production: Mock mode OFF (real calls enabled)
+//
+// Override options:
+//   - Set VITE_USE_REAL_CALLS=true to force real calls (even in dev)
+//   - Set VITE_USE_MOCK_CALLS=true to force mock mode (even in production)
+//
+const USE_MOCK_CALL = (() => {
+  // Explicit override: force real calls
+  if (import.meta.env.VITE_USE_REAL_CALLS === "true") {
+    return false;
+  }
+  // Explicit override: force mock mode
+  if (import.meta.env.VITE_USE_MOCK_CALLS === "true") {
+    return true;
+  }
+  // Default: mock mode in development, real calls in production
+  return import.meta.env.MODE !== "production";
+})();
 
 // Mock response data for demo purposes
 const MOCK_CALL_RESPONSE = {
   success: true,
   call_id: "019a20d9-4112-7aae-9dd3-6c03a5def052",
   message: "Call initiated successfully to +12402465262 (Status: ended)",
-  patient_phone: "+12402465262",
+  patient_phone: "+12014231932",
   patient_name: "Linda Martinez",
   status: "ended",
   call_completed: true,
@@ -143,7 +163,8 @@ export function useInitiateCall() {
           patient_id: patientId || null,
           patient_name: patientName,
           patient_phone: patientPhone,
-          status: "initiated",
+          status: data.status || "initiated",
+          transcript_ready: data.transcript ? true : false,
         })
         .select()
         .single();
@@ -155,34 +176,99 @@ export function useInitiateCall() {
         );
         // Don't fail the whole operation if database insert fails
       } else if (callData) {
-        // Schedule notification for 60 seconds later
-        console.log(
-          "[useInitiateCall] Scheduling notification for 60 seconds from now"
-        );
-        setTimeout(async () => {
-          console.log(
-            "[useInitiateCall] Creating notification for call:",
-            callData.id
-          );
-          const { error: notificationError } = await supabase
-            .from("notifications")
+        // If call completed with transcript, store in vapi_calls table
+        if (patientId && data.status === "ended" && (data.transcript || data.structured_data)) {
+          console.log("[useInitiateCall] Storing transcript and structured data in vapi_calls table");
+          
+          // Convert transcript to string if it's an array
+          let transcriptText = null;
+          if (data.transcript) {
+            if (Array.isArray(data.transcript)) {
+              // Extract content from transcript array
+              transcriptText = data.transcript
+                .map((item: any) => item.content || item.message || JSON.stringify(item))
+                .join("\n\n");
+            } else if (typeof data.transcript === "string") {
+              transcriptText = data.transcript;
+            }
+          }
+
+          // Use type assertion since vapi_calls table may not be in generated types
+          const supabaseAny = supabase as any;
+          const { error: vapiCallError } = await supabaseAny
+            .from("vapi_calls")
             .insert({
-              type: "call_completed",
-              title: "Call Transcript Ready",
-              message: `The call transcript for ${patientName} is now available for review.`,
-              call_id: callData.id,
-              read: false,
+              patient_id: patientId,
+              vapi_call_id: data.call_id,
+              call_type: "outboundPhoneCall",
+              call_status: data.status,
+              transcript: transcriptText,
+              summary: data.structured_data?.summary || null,
+              recording_url: data.recording_url || null,
+              cost: data.cost || null,
+              assessment_completed: !!data.structured_data,
+              metadata: data.structured_data ? { structured_data: data.structured_data } : null,
             });
 
-          if (notificationError) {
+          if (vapiCallError) {
             console.error(
-              "[useInitiateCall] Error creating notification:",
-              notificationError
+              "[useInitiateCall] Error storing VAPI call data:",
+              vapiCallError
             );
           } else {
-            console.log("[useInitiateCall] Notification created successfully");
+            console.log("[useInitiateCall] VAPI call data stored successfully");
+            
+            // Update calls table to mark transcript as ready
+            await supabase
+              .from("calls")
+              .update({ 
+                status: "completed",
+                completed_at: new Date().toISOString(),
+                transcript_ready: true 
+              })
+              .eq("id", callData.id);
+
+            // Create notification immediately since transcript is ready
+            await supabase
+              .from("notifications")
+              .insert({
+                type: "call_completed",
+                title: "Call Transcript Ready",
+                message: `The call transcript for ${patientName} is now available for review.`,
+                call_id: callData.id,
+                read: false,
+              });
           }
-        }, 60000); // 60 seconds
+        } else if (callData && data.status !== "ended") {
+          // Schedule notification for later if call is still in progress
+          console.log(
+            "[useInitiateCall] Scheduling notification for 60 seconds from now"
+          );
+          setTimeout(async () => {
+            console.log(
+              "[useInitiateCall] Creating notification for call:",
+              callData.id
+            );
+            const { error: notificationError } = await supabase
+              .from("notifications")
+              .insert({
+                type: "call_completed",
+                title: "Call Transcript Ready",
+                message: `The call transcript for ${patientName} is now available for review.`,
+                call_id: callData.id,
+                read: false,
+              });
+
+            if (notificationError) {
+              console.error(
+                "[useInitiateCall] Error creating notification:",
+                notificationError
+              );
+            } else {
+              console.log("[useInitiateCall] Notification created successfully");
+            }
+          }, 60000); // 60 seconds
+        }
       }
 
       // Show appropriate toast based on completion status
