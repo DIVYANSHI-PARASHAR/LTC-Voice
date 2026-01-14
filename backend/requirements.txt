@@ -1,0 +1,17 @@
+# FastAPI Backend Dependencies
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+
+# VAPI Python SDK
+vapi_server_sdk
+
+# Environment & Configuration
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic_settings
+
+# CORS & Utilities
+python-multipart==0.0.17
+httpx==0.27.2
